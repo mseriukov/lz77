@@ -36,7 +36,7 @@ typedef struct lzn_s {
 
 typedef struct lzn_if {
     errno_t (*compress)(lzn_t* lzn, const uint8_t* data, size_t bytes);
-    errno_t (*decompress_and_compare)(lzn_t* lzn, uint8_t* data, size_t bytes);
+    errno_t (*decompress)(lzn_t* lzn, uint8_t* data, size_t bytes);
 } lzn_if;
 
 extern lzn_if lzn;
@@ -222,7 +222,7 @@ static inline errno_t lzn_read_bits(lzn_t* lzn, size_t* data, uint8_t n) {
             r = lzn_read_bit(lzn, &bit) << i;
             bits |= (((uint64_t)bit) << i);
         }
-        *data = bits;
+        *data = (size_t)bits;
     } else {
         r = EINVAL;
     }
@@ -290,7 +290,7 @@ static errno_t lzn_decompress(lzn_t* lzn, uint8_t* data, size_t bytes) {
 
 lzn_if lzn = {
     .compress   = lzn_compress,
-    .decompress_and_compare = lzn_decompress,
+    .decompress = lzn_decompress,
 };
 
 #endif // lzn_H

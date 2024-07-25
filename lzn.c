@@ -2,9 +2,8 @@
 #include "rt.h"
 #include "lzn.h"
 
-// #define FROM_FILE "c:/sqlite3.c"
-   #define FROM_FILE "c:/ui_app.c"
-// #define FROM_FILE __FILE__
+   #define FROM_FILE __FILE__
+// #define FROM_FILE "c:/tmp/sqlite3.c"
 // #undef  FROM_FILE
 
 errno_t lzn_read(lzn_t* lzn) {
@@ -73,12 +72,15 @@ static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
         return ENOMEM;
     }
     data[bytes] = 0x00;
-    r = lzn.decompress_and_compare(&lz, data, bytes);
+    r = lzn.decompress(&lz, data, bytes);
     fclose(in);
     rt_assert(r == 0);
     if (r == 0) {
         rt_println("same: %s", memcmp(data, data, bytes) == 0 ?
                    "true" : "false");
+    }
+    if (bytes < 128) {
+        rt_println("Decompressed: %s", data);
     }
     free(data);
     if (r != 0) {
@@ -118,8 +120,6 @@ int main(int argc, const char* argv[]) {
     }
 #ifdef FROM_FILE
     free(data);
-#else
-    rt_println("Decompressed: %s", decompressed);
 #endif
     return 0;
 }
