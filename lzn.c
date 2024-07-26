@@ -20,6 +20,33 @@ errno_t lzn_write(lzn_t* lzn) {
     return fwrite(&lzn->buffer, 1, bytes, f) == bytes ? 0 : errno;
 }
 
+static double compress_ratio(const char* fn,
+        const uint8_t* data, size_t bytes, uint8_t window, uint8_t lookahead) {
+    FILE* out = null; // compressed file
+    errno_t r = fopen_s(&out, fn, "wb") != 0;
+    if (r != 0 || out == null) {
+        rt_println("Failed to create \"%s\"", fn);
+        return r;
+    }
+    lzn_stream_t stream = { .that = (void*)out, .write = lzn_write };
+    lzn_t lz = {
+        .bits = {
+            .min_match  =  3,
+            .window     = window,
+            .lookahead  = lookahead
+        },
+        .stream = &stream,
+        .stats  = false
+    };
+    r = lzn.compress(&lz, data, bytes);
+    fclose(out);
+    rt_assert(r == 0);
+    if (r != 0) {
+        rt_println("Failed to compress");
+    }
+    return lz.compressed_bytes * 100.0 / bytes;
+}
+
 static errno_t compress(const char* fn, const uint8_t* data, size_t bytes) {
     FILE* out = null; // compressed file
     errno_t r = fopen_s(&out, fn, "wb") != 0;
@@ -31,8 +58,8 @@ static errno_t compress(const char* fn, const uint8_t* data, size_t bytes) {
     lzn_t lz = {
         .bits = {
             .min_match  =  3,
-            .window     = 14,
-            .lookahead  =  4
+            .window     = 16,
+            .lookahead  =  5
         },
         .stream = &stream,
         .stats  = true
@@ -123,6 +150,26 @@ int main(int argc, const char* argv[]) {
     if (r == 0) {
         r = decompress_and_compare("compressed.bin", data, bytes);
     }
+#if 0
+    int8_t min_window = 0xFF;
+    int8_t min_lookahead = 0xFF;
+    double min_percentage = 100.0;
+    for (uint8_t window = 10; window <= 16; window++) {
+        for (uint8_t lookahead = 3; lookahead <= 8; lookahead++) {
+            double percentage =  compress_ratio("compressed.bin",
+                                 data, bytes, window, lookahead);
+            rt_println("window: %d lookahead: %d %.1f%%",
+                (int)window, (int)lookahead, percentage);
+            if (percentage < min_percentage) {
+                min_window = window;
+                min_lookahead = lookahead;
+                min_percentage = percentage;
+            }
+        }
+    }
+    rt_println("min window: %d min lookahead: %d %.1f%%",
+        (int)min_window, (int)min_lookahead, min_percentage);
+#endif
 #ifdef FROM_FILE
     free(data);
 #endif

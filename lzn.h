@@ -26,8 +26,8 @@ typedef struct lzn_s {
     struct { // number of bits or log2()
         uint8_t signature; // 0xFC
         uint8_t min_match; // default:  3  range [3.. 5]
-        uint8_t window;    // default: 14  range [8..20] log2(window)
-        uint8_t lookahead; // default:  4  range [4.. 8] log2(lookahead)
+        uint8_t window;    // default: 16  range [8..20] log2(window)
+        uint8_t lookahead; // default:  5  range [4.. 8] log2(lookahead)
     } bits;
     // stats and histograms
     bool stats;
@@ -84,15 +84,15 @@ static int lzn_bit_count(size_t v) {
 static errno_t lzn_compress(lzn_t* lzn, const uint8_t* data, size_t bytes) {
     if (lzn->bits.signature == 0) { lzn->bits.signature = lzn_sinature; }
     if (lzn->bits.min_match == 0) { lzn->bits.min_match =  3; }
-    if (lzn->bits.window    == 0) { lzn->bits.window    = 14; }
-    if (lzn->bits.lookahead == 0) { lzn->bits.lookahead =  4; }
+    if (lzn->bits.window    == 0) { lzn->bits.window    = 16; }
+    if (lzn->bits.lookahead == 0) { lzn->bits.lookahead =  5; }
     const size_t min_match      = lzn->bits.min_match;
     const size_t window_bits    = lzn->bits.window;
     const size_t lookahead_bits = lzn->bits.lookahead;
     // acceptable ranges:
     rt_assert(3 <= min_match && min_match <= 5);
     rt_assert(8 <= window_bits && window_bits <= 20);
-    rt_assert(4 <= lookahead_bits && lookahead_bits <= 8);
+    rt_assert(3 <= lookahead_bits && lookahead_bits <= 8);
     const size_t window    = ((size_t)1U) << (uint8_t)window_bits;
     const size_t lookahead = ((size_t)1U) << (uint8_t)lookahead_bits;
     const size_t max_len   = lookahead + min_match - 1;
