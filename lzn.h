@@ -124,8 +124,10 @@ static errno_t lzn_compress(lzn_t* lzn, const uint8_t* data, size_t bytes) {
             size_t match_len = 0;
             size_t match_pos = 0;
             if (i >= min_match) {
-                size_t j = i - min_match;
-                for (;;) {
+                size_t s = i < window + 1 ? 0 : i - window + 1;
+                size_t e = i < min_match ? 0 : i - min_match;
+                for (size_t j = s; j < e; j++) {
+                    rt_assert((i - j) <= window - 1);
                     uint32_t k = 0;
                     const size_t n1 = bytes - i;
                     const size_t n2 = i - j;
@@ -142,8 +144,6 @@ static errno_t lzn_compress(lzn_t* lzn, const uint8_t* data, size_t bytes) {
                             break;
                         }
                     }
-                    if (j == 0 || (i - j) >= window - 1) { break; }
-                    j--;
                 }
             }
             if (match_len >= min_match) {
