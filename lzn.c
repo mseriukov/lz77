@@ -2,7 +2,9 @@
 #include "rt.h"
 #include "lzn.h"
 
-   #define FROM_FILE __FILE__
+// #define FROM_FILE __FILE__
+   #define FROM_FILE "c:/tmp/ui_app.c"
+// #define FROM_FILE "c:/tmp/program.exe"
 // #define FROM_FILE "c:/tmp/sqlite3.c"
 // #undef  FROM_FILE
 
@@ -27,11 +29,13 @@ static errno_t compress(const char* fn, const uint8_t* data, size_t bytes) {
     }
     lzn_stream_t stream = { .that = (void*)out, .write = lzn_write };
     lzn_t lz = {
-        .min_match  =  3,
-        .window     = 14,
-        .lookahead  =  4,
+        .bits = {
+            .min_match  =  3,
+            .window     = 14,
+            .lookahead  =  4
+        },
         .stream = &stream,
-        .stats = true
+        .stats  = true
     };
     r = lzn.compress(&lz, data, bytes);
     fclose(out);
@@ -76,8 +80,9 @@ static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
     fclose(in);
     rt_assert(r == 0);
     if (r == 0) {
-        rt_println("same: %s", memcmp(data, data, bytes) == 0 ?
-                   "true" : "false");
+        bool same = size == bytes && memcmp(input, data, bytes) == 0;
+        rt_println("same: %s", same ? "true" : "false");
+        rt_assert(same);
     }
     if (bytes < 128) {
         rt_println("Decompressed: %s", data);

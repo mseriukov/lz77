@@ -7,6 +7,8 @@
 
 #include "rt.h"
 
+enum { lzn_sinature = 0xFC }; // 1 byte
+
 typedef struct lzn_stream_s lzn_stream_t;
 typedef struct lzn_s lzn_t;
 
@@ -21,9 +23,12 @@ typedef struct lzn_s {
     uint64_t buffer;
     uint32_t bp; // bit position 0..63
     // compression parameters;
-    uint8_t min_match; // default:  3  range [3.. 5]
-    uint8_t window;    // default: 14  range [8..20] log2(window)
-    uint8_t lookahead; // default:  4  range [4.. 8] log2(lookahead)
+    struct { // number of bits or log2()
+        uint8_t signature; // 0xFC
+        uint8_t min_match; // default:  3  range [3.. 5]
+        uint8_t window;    // default: 14  range [8..20] log2(window)
+        uint8_t lookahead; // default:  4  range [4.. 8] log2(lookahead)
+    } bits;
     // stats and histograms
     bool stats;
     size_t compressed_bytes;
@@ -57,7 +62,7 @@ static inline errno_t lzn_write_bit(lzn_t* lzn, bool bit) {
     return r;
 }
 
-static inline errno_t lzn_write_bits(lzn_t* lzn, uint64_t bits, uint8_t n) {
+static inline errno_t lzn_write_bits(lzn_t* lzn, uint64_t bits, size_t n) {
     errno_t r = 0;
     rt_assert(n <= 64);
     for (int i = 0; i < n && r == 0; i++) {
@@ -77,92 +82,105 @@ static int lzn_bit_count(size_t v) {
 }
 
 static errno_t lzn_compress(lzn_t* lzn, const uint8_t* data, size_t bytes) {
-    if (lzn->min_match      == 0) { lzn->min_match      =  3; }
-    if (lzn->window    == 0) { lzn->window    = 14; }
-    if (lzn->lookahead == 0) { lzn->lookahead =  4; }
+    if (lzn->bits.signature == 0) { lzn->bits.signature = lzn_sinature; }
+    if (lzn->bits.min_match == 0) { lzn->bits.min_match =  3; }
+    if (lzn->bits.window    == 0) { lzn->bits.window    = 14; }
+    if (lzn->bits.lookahead == 0) { lzn->bits.lookahead =  4; }
+    const size_t min_match      = lzn->bits.min_match;
+    const size_t window_bits    = lzn->bits.window;
+    const size_t lookahead_bits = lzn->bits.lookahead;
     // acceptable ranges:
-    rt_assert(3 <= lzn->min_match && lzn->min_match <= 5);
-    rt_assert(8 <= lzn->window && lzn->window <= 20);
-    rt_assert(4 <= lzn->lookahead && lzn->lookahead <= 8);
+    rt_assert(3 <= min_match && min_match <= 5);
+    rt_assert(8 <= window_bits && window_bits <= 20);
+    rt_assert(4 <= lookahead_bits && lookahead_bits <= 8);
+    const size_t window    = ((size_t)1U) << (uint8_t)window_bits;
+    const size_t lookahead = ((size_t)1U) << (uint8_t)lookahead_bits;
+    const size_t max_len   = lookahead + min_match - 1;
     lzn->buffer = 0;
     lzn->bp = 0;
     // Write the length of source data so decompressor knows how much memory
     // to allocate for decompression
-    errno_t r = lzn_write_bits(lzn, bytes, sizeof(bytes) * 8);
-    if (r == 0) {
-        r = lzn_write_bits(lzn, lzn->min_match, sizeof(lzn->min_match) * 8);
-    }
-    if (r == 0) {
-        r = lzn_write_bits(lzn, lzn->window, sizeof(lzn->window) * 8);
-    }
-    if (r == 0) {
-        r = lzn_write_bits(lzn, lzn->lookahead, sizeof(lzn->lookahead) * 8);
-    }
+    errno_t r = 0;
+    if (r == 0) { r = lzn_write_bits(lzn, (uint64_t)bytes, 64); }
+    if (r == 0) { r = lzn_write_bits(lzn, (uint64_t)lzn->bits.signature, 8); }
+    if (r == 0) { r = lzn_write_bits(lzn, (uint64_t)lzn->bits.min_match, 8); }
+    if (r == 0) { r = lzn_write_bits(lzn, (uint64_t)lzn->bits.window, 8);    }
+    if (r == 0) { r = lzn_write_bits(lzn, (uint64_t)lzn->bits.lookahead, 8); }
+    size_t max_match_ofs = 0;
+    size_t max_match_len = 0;
+    size_t min_match_ofs = UINT32_MAX;
+    size_t min_match_len = UINT32_MAX;
     lzn->compressed_count = 0;
     lzn->compressed_bits = 0;
     lzn->uncompressed_bits = 0;
-    memset(lzn->match_len_histogram, 0x00, sizeof(lzn->match_len_histogram));
-    memset(lzn->match_pos_histogram, 0x00, sizeof(lzn->match_pos_histogram));
-    size_t max_match_ofs = 0;
-    size_t max_match_len = 0;
+    size_t* len_histogram = lzn->match_len_histogram;
+    size_t* pos_histogram = lzn->match_pos_histogram;
+    memset(len_histogram, 0x00, sizeof(lzn->match_len_histogram));
+    memset(pos_histogram, 0x00, sizeof(lzn->match_pos_histogram));
     lzn->compressed_bytes = 0;
     if (r == 0) {
-        const size_t window = (1ULL << lzn->window);
-        const size_t lzn_lookahead = (1U << lzn->lookahead) + lzn->min_match - 1;
         size_t i = 0;
         while (i < bytes && r == 0) {
             size_t match_len = 0;
             size_t match_pos = 0;
-            if (i >= lzn->min_match) {
-                size_t j = i - lzn->min_match;
+            if (i >= min_match) {
+                size_t j = i - min_match;
                 for (;;) {
                     uint32_t k = 0;
-                    while (k < lzn_lookahead &&
-                           i + k < bytes &&
-                           data[j + k] == data[i + k]) {
+                    const size_t n1 = bytes - i;
+                    const size_t n2 = i - j;
+                    const size_t n3 = n1 < n2 ? n1 : n2;
+                    const size_t n = max_len < n3 ? max_len : n3;
+                    while (k < n && data[j + k] == data[i + k]) {
                         k++;
                     }
                     if (k > match_len) {
                         match_len = k;
                         match_pos = i - j;
+                        if (match_len == max_len) {
+//                          rt_println("match_len == max_len offset: %d", i - j);
+                            break;
+                        }
                     }
                     if (j == 0 || (i - j) >= window - 1) { break; }
                     j--;
                 }
             }
-            if (match_len >= lzn->min_match) {
+            if (match_len >= min_match) {
                 max_match_ofs = match_pos > max_match_ofs ?
                                 match_pos : max_match_ofs;
                 max_match_len = match_len > max_match_len ?
                                 match_len : max_match_len;
+                min_match_ofs = match_pos < min_match_ofs ?
+                                match_pos : min_match_ofs;
+                min_match_len = match_len < min_match_len ?
+                                match_len : min_match_len;
                 // TODO: Golumb Rice encode offset and len
                 r = lzn_write_bit(lzn, 1); // flag bit
                 if (r == 0) {
-                    rt_assert(match_pos < (1ULL << lzn->window));
-                    r = lzn_write_bits(lzn, match_pos, lzn->window);
+                    rt_assert(min_match <= match_pos && match_pos < window);
+                    r = lzn_write_bits(lzn, match_pos, window_bits);
                 }
                 if (r == 0) {
-                    rt_assert(match_len - lzn->min_match < (1ULL << lzn->lookahead));
-                    r = lzn_write_bits(lzn, match_len - lzn->min_match, lzn->lookahead);
+                    rt_assert(match_len - min_match < lookahead);
+                    r = lzn_write_bits(lzn, match_len - min_match, lookahead_bits);
                 }
                 if (r == 0) {
                     i += match_len;
                     if (lzn->stats) {
-                        int bc = lzn_bit_count(match_len - lzn->min_match);
+                        int bc = lzn_bit_count(match_len - min_match);
                         rt_assert(0 <= bc && bc < rt_countof(lzn->match_len_histogram));
-                        lzn->match_len_histogram[bc]++;
+                        len_histogram[bc]++;
                         bc = lzn_bit_count(match_pos);
                         rt_assert(0 <= bc && bc < rt_countof(lzn->match_pos_histogram));
-                        lzn->match_pos_histogram[bc]++;
+                        pos_histogram[bc]++;
                         lzn->compressed_bits += 19;
                         lzn->compressed_count++;
                     }
                 }
             } else { // Emit as 9-bit character
                 r = lzn_write_bit(lzn, 0); // flag bit
-                if (r == 0) {
-                    r = lzn_write_bits(lzn, data[i], 8);
-                }
+                if (r == 0) { r = lzn_write_bits(lzn, data[i], 8); }
                 if (r == 0) {
                     i++;
                     lzn->uncompressed_bits += 9;
@@ -179,22 +197,25 @@ static errno_t lzn_compress(lzn_t* lzn, const uint8_t* data, size_t bytes) {
                                        lzn->uncompressed_bits);
             rt_println("max_match_ofs: %d max_match_len: %d",
                         max_match_ofs, max_match_len);
+            rt_println("min_match_ofs: %d min_match_len: %d",
+                        min_match_ofs, min_match_len);
             rt_println("log2(length):");
             double sum = 0;
-            for (int32_t k = 0; k < lzn->lookahead; k++) {
-                double percent = (double)lzn->match_len_histogram[k] * 100.0 /
+            for (int32_t k = 0; k <= lookahead_bits; k++) {
+                double percent = (double)len_histogram[k] * 100.0 /
                                          lzn->compressed_count;
                 sum += percent;
-                rt_println("[%2d] %10.6f %10.6f %lld", k, percent, sum, lzn->match_len_histogram[k]);
+                rt_println("[%2d] %10.6f %10.6f %lld",
+                            k, percent, sum, len_histogram[k]);
             }
             rt_println("log2(positions)");
             sum = 0;
-            const int m = rt_countof(lzn->match_pos_histogram);
-            for (int32_t k = lzn->window; k >= 0; k--) {
-                double percent = (double)lzn->match_pos_histogram[k] * 100.0 /
+            for (int32_t k = (int32_t)window_bits; k >= 0; k--) {
+                double percent = (double)pos_histogram[k] * 100.0 /
                                          lzn->compressed_count;
                 sum += percent;
-                rt_println("[%2d] %10.6f %10.6f %lld", k, percent, sum, lzn->match_pos_histogram[k]);
+                rt_println("[%2d] %10.6f %10.6f %lld",
+                            k, percent, sum, pos_histogram[k]);
             }
         }
     }
@@ -239,15 +260,24 @@ static inline errno_t lzn_read_byte(lzn_t* lzn, uint8_t* data) {
 static errno_t lzn_decompress(lzn_t* lzn, uint8_t* data, size_t bytes) {
     lzn->buffer = 0;
     lzn->bp = 0;
+    errno_t r = 0;
     size_t data_size = 0; // original source data size
-    errno_t r = lzn_read_bits(lzn, &data_size, 64);
+    if (r == 0) { r = lzn_read_bits(lzn, &data_size, 64); }
     if (r == 0 && data_size != bytes) {
-        rt_println("Data size mismatch %ld != %ld", data_size, bytes);
+        rt_println("Data size mismatch %lld != %lld",
+                    (uint64_t)data_size, (uint64_t)bytes);
         r = EINVAL;
     }
-    if (r == 0) { r = lzn_read_byte(lzn, &lzn->min_match); }
-    if (r == 0) { r = lzn_read_byte(lzn, &lzn->window); }
-    if (r == 0) { r = lzn_read_byte(lzn, &lzn->lookahead); }
+    if (r == 0) { r = lzn_read_byte(lzn, &lzn->bits.signature); }
+    if (r == 0 && lzn->bits.signature != lzn_sinature) {
+        rt_println("Bad signature 0x%02X expected: 0x%02X",
+                    lzn->bits.signature != lzn_sinature);
+        r = EINVAL;
+    }
+    if (r == 0) { r = lzn_read_byte(lzn, &lzn->bits.min_match); }
+    if (r == 0) { r = lzn_read_byte(lzn, &lzn->bits.window);    }
+    if (r == 0) { r = lzn_read_byte(lzn, &lzn->bits.lookahead); }
+    const size_t window = ((size_t)1U) << lzn->bits.window;
     size_t index = 0; // output data[index]
     while (index < bytes && r == 0) {
         bool bit;
@@ -259,21 +289,24 @@ static errno_t lzn_decompress(lzn_t* lzn, uint8_t* data, size_t bytes) {
         if (bit) { // It's data compressed sequence
             size_t offset = 0;
             size_t length = 0;
-            r = lzn_read_bits(lzn, &offset, lzn->window);
+            r = lzn_read_bits(lzn, &offset, lzn->bits.window);
             if (r != 0) {
                 rt_println("Failed to read offset");
             } else {
-                r = lzn_read_bits(lzn, &length, lzn->lookahead);
+
+                r = lzn_read_bits(lzn, &length, lzn->bits.lookahead);
                 if (r != 0) {
                     rt_println("Failed to read length");
                 }
-                length += lzn->min_match;
+                length += lzn->bits.min_match;
             }
             if (r == 0) { // TODO: memcpy
-                for (uint32_t i = 0; i < length; i++) {
-                    data[index] = data[index - offset];
-                    index++;
-                }
+                memcpy(data + index, data + index - offset, length);
+                index += length;
+//              for (uint32_t i = 0; i < length; i++) {
+//                  data[index] = data[index - offset];
+//                  index++;
+//              }
             }
         } else { // literal byte
             size_t b; // byte
