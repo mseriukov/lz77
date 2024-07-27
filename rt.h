@@ -1,6 +1,6 @@
 #pragma once
-#ifndef RT_H
-#define RT_H
+#ifndef rt_h
+#define rt_h
 
 // nano runtime to make debugging, life, universe and everything a bit easier
 
@@ -60,13 +60,15 @@ static int32_t rt_abort(int exit_code) {
 
 #define rt_println(...) rt_print_line(__FILE__, __LINE__, "" __VA_ARGS__)
 
-#if defined(DEBUG) || defined(_DEBUG)
-#define rt_assert(b, ...) ((void)                        \
+#define rt_swear(b, ...) ((void)                         \
     ((b) ? 0 : rt_print_line(__FILE__, __LINE__,         \
                              #b " false " __VA_ARGS__) + \
                rt_abort(1)))
+
+#if defined(DEBUG) || defined(_DEBUG)
+#define rt_assert(b, ...) rt_swear(b, __VA_ARGS__)
 #else
 #define rt_assert(b, ...) ((void)(0))
 #endif
 
-#endif // RT_H
+#endif // rt_h
