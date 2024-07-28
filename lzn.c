@@ -1,41 +1,40 @@
 #include <Windows.h>
 #include "rt.h"
+#define lzn_implementation
 #include "lzn.h"
 
-// #define FROM_FILE "c:/tmp/ut.h"
+enum { lzn_window_bits = 13 };
+
+// #define FROM_FILE "c:/tmp/ut.h"  // 11,4 36.5%
 // #define FROM_FILE "c:/tmp/ui.h"
 // #define FROM_FILE "c:/tmp/program.exe"
-// #define FROM_FILE "c:/tmp/sqlite3.c"
+   #define FROM_FILE "c:/tmp/sqlite3.c" // 13,5 38.2% 13,6 39.4% 13,4 %37.1 12,4 39.0% 11,3 42.9 11,4 42.9
 
-#define FROM_FILE __FILE__
+// #define FROM_FILE __FILE__
 
 // #undef  FROM_FILE
 
 uint64_t lzn_read(lzn_t* lzn) {
     uint64_t buffer = 0;
-    if (lzn->stream->error == 0) {
-        FILE* f = (FILE*)lzn->stream->that;
+    if (lzn->error == 0) { // sticky
+        FILE* f = (FILE*)lzn->that;
         const size_t bytes = sizeof(buffer);
         if (fread(&buffer, 1, bytes, f) != bytes) {
             // reading past end of file does not set errno
-            lzn->stream->error = errno == 0 ? EBADF : errno;
-            rt_swear(lzn->stream->error != 0);
-        } else {
-            lzn->stream->bytes_read += bytes;
+            lzn->error = errno == 0 ? EBADF : errno;
+            rt_swear(lzn->error != 0);
         }
     }
     return buffer;
 }
 
 void lzn_write(lzn_t* lzn, uint64_t buffer) {
-    if (lzn->stream->error == 0) {
-        FILE* f = (FILE*)lzn->stream->that;
+    if (lzn->error == 0) {
+        FILE* f = (FILE*)lzn->that;
         const size_t bytes = sizeof(buffer);
         if (fwrite(&buffer, 1, bytes, f) != bytes) {
-            lzn->stream->error = errno;
-            rt_swear(lzn->stream->error != 0);
-        } else {
-            lzn->stream->bytes_written += bytes;
+            lzn->error = errno;
+            rt_swear(lzn->error != 0);
         }
     }
 }
@@ -47,20 +46,20 @@ static errno_t compress(const char* fn, const uint8_t* data, size_t bytes) {
         rt_println("Failed to create \"%s\"", fn);
         return r;
     }
-    lzn_stream_t stream = { .that = (void*)out, .write = lzn_write };
     lzn_t lz = {
-        .window_bits = 11, // 15 is much better but much slower
-        .stream = &stream,
+        .that = (void*)out,
+        .write = lzn_write
     };
-    lzn.compress(&lz, data, bytes);
+    lzn.write_header(&lz, bytes, lzn_window_bits);
+    lzn.compress(&lz, data, bytes, lzn_window_bits);
     fclose(out);
-    rt_assert(lz.stream->error == 0);
-    if (lz.stream->error != 0) {
+    rt_assert(lz.error == 0);
+    if (lz.error != 0) {
         rt_println("Failed to compress");
     } else {
         rt_println("%ld -> %ld %.1f%%",
-                bytes, lz.stream->bytes_written,
-                lz.stream->bytes_written * 100.0 / bytes);
+                bytes, lz.bytes_written,
+                lz.bytes_written * 100.0 / bytes);
     }
     return r;
 }
@@ -73,17 +72,14 @@ static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
         rt_println("Failed to open \"%s\"", fn);
         return r;
     }
+    lzn_t lz = {
+        .that = (void*)in,
+        .read = lzn_read
+    };
     size_t bytes = 0;
-    if (fread(&bytes, sizeof(bytes), 1, in) != 1) {
-        r = errno;
-        rt_println("Failed to read decompressed length");
-        fclose(in);
-        return r;
-    }
-    rewind(in);
-    rt_assert(bytes == size);
-    lzn_stream_t stream = { .that = (void*)in, .read = lzn_read };
-    lzn_t lz = { .stream = &stream };
+    uint8_t window_bits = 0;
+    lzn.read_header(&lz, &bytes, &window_bits);
+    rt_assert(lz.error == 0 && bytes == size && window_bits == lzn_window_bits);
     uint8_t* data = (uint8_t*)malloc(bytes + 1);
     if (data == null) {
         rt_println("Failed to allocate memory for decompressed data");
@@ -91,10 +87,10 @@ static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
         return ENOMEM;
     }
     data[bytes] = 0x00;
-    lzn.decompress(&lz, data, bytes);
+    lzn.decompress(&lz, data, bytes, lzn_window_bits);
     fclose(in);
-    rt_assert(lz.stream->error == 0);
-    if (lz.stream->error == 0) {
+    rt_assert(lz.error == 0);
+    if (lz.error == 0) {
         rt_println("same: %s", memcmp(data, data, bytes) == 0 ?
                    "true" : "false");
     }
