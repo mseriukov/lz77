@@ -48,27 +48,31 @@ static int32_t rt_print_line(const char* fn, int32_t ln, const char* fmt, ...) {
     return 0;
 }
 
-static int32_t rt_abort(int exit_code) {
-    #ifdef _WINDOWS_
-        DebugBreak();
-        ExitProcess(exit_code);
-    #else
-        exit(exit_code);
-    #endif
-    return 0;
-}
-
 #define rt_println(...) rt_print_line(__FILE__, __LINE__, "" __VA_ARGS__)
 
 #define rt_swear(b, ...) ((void)                         \
     ((b) ? 0 : rt_print_line(__FILE__, __LINE__,         \
                              #b " false " __VA_ARGS__) + \
-               rt_abort(1)))
+               rt_exit(1)))
 
 #if defined(DEBUG) || defined(_DEBUG)
 #define rt_assert(b, ...) rt_swear(b, __VA_ARGS__)
 #else
 #define rt_assert(b, ...) ((void)(0))
 #endif
+
+static int32_t rt_exit(int exit_code) {
+    // assert or swear here will recurse
+    if (exit_code == 0) { rt_println("exit code must not be zero"); }
+    if (exit_code != 0) {
+        #ifdef _WINDOWS_
+            DebugBreak();
+            ExitProcess(exit_code);
+        #else
+            exit(exit_code);
+        #endif
+    }
+    return 0;
+}
 
 #endif // rt_h
