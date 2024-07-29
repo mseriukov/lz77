@@ -41,9 +41,6 @@ extern lz77_if lz77;
 #ifndef lz77_assert
 #define lz77_assert(...) do {] while (0)
 #endif
-#ifndef lz77_swear
-#define lz77_swear(...) do {] while (0)
-#endif
 #ifndef lz77_println
 #define lz77_println(...) do {] while (0)
 #endif
@@ -346,5 +343,5 @@ lz77_if lz77 = {
 #pragma pop_macro("read_bits")
 #pragma pop_macro("read_bit")
 
-#endif lz77_implementation
+#endif // lz77_implementation
 

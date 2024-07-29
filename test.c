@@ -1,28 +1,23 @@
-#ifdef _MSC_VER
+#ifdef _MSC_VER // /Wall is very useful but yet a bit overreaching:
 #pragma warning(disable: 4820) // 'bytes' bytes padding added after construct 'name'
 #pragma warning(disable: 5045) // Spectre mitigation for memory load
 #pragma warning(disable: 4710) // function not inlined
 #pragma warning(disable: 4711) // function selected for automatic inline expansion
 #endif
-#include "lz77.h"
 
-#ifdef _MSC_VER
-#pragma warning(disable: 4668) // preprocessor macro replacing with '0' for '#if/#elif'
+#include "lz77.h"
+#include "rt.h"
+
+#if defined(_MSC_VER) && defined(NEED_WIN32_API)
+#define STRICT // opposite is SLOPPY, right?
+#define WIN32_LEAN_AND_MEAN // exclude stuff which no one needs/wants
+#define VC_EXTRALEAN        // exclude even more stuff
 #include <Windows.h>
 #endif
 
-#include "rt.h"
-
 enum { lzn_window_bits = 11 };
 
-// #define FILE_NAME "c:/tmp/ut.h"  // 11,4 36.5%
-// #define FILE_NAME "c:/tmp/ui.h"
-// #define FILE_NAME "c:/tmp/program.exe"
-// #define FILE_NAME "c:/tmp/sqlite3.c" // 13,5 38.2% 13,6 39.4% 13,4 %37.1 12,4 39.0% 11,3 42.9 11,4 42.9
-
-   #define FILE_NAME __FILE__
-
-// #undef  FILE_NAME
+#define FILE_NAME __FILE__
 
 static uint64_t file_read(lz77_t* lz) {
     uint64_t buffer = 0;
@@ -231,11 +226,10 @@ int main(int argc, const char* argv[]) {
 }
 
 #define lz77_assert(b, ...) rt_assert(b, __VA_ARGS__)
-#define lz77_swear(b, ...)  rt_swear(b, __VA_ARGS__)
 #define lz77_println(...)   rt_println(__VA_ARGS__)
 
 #define lz77_historgram // to dump histograms on compress
 #undef  lz77_historgram // no histograms
 
-#define lz77_implementation
+#define lz77_implementation // this will include the implementation of lz77
 #include "lz77.h"

@@ -16,10 +16,14 @@
 
 #define rt_countof(a) (sizeof(a) / sizeof((a)[0]))
 
+#if defined(_MSC_VER) && !defined(OutputDebugString)
+extern __declspec(dllimport) void __stdcall OutputDebugStringA(const char* s);
+#endif
+
 static void rt_output_line(const char* text) {
-    // "full path filename(line):" is useful for MSVC single click
-    // navigation to the source of println() call:
-    #ifdef _WINDOWS_
+    #ifdef _MSC_VER
+        // "full path filename(line):" is useful for MSVC single click
+        // navigation to the source of println() call:
         OutputDebugStringA(text);
     #endif
     // remove full path from filename on stderr:
