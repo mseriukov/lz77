@@ -13,7 +13,7 @@
 
 #include "rt.h"
 
-enum { lzn_window_bits = 13 };
+enum { lzn_window_bits = 11 };
 
 // #define FILE_NAME "c:/tmp/ut.h"  // 11,4 36.5%
 // #define FILE_NAME "c:/tmp/ui.h"
@@ -24,7 +24,7 @@ enum { lzn_window_bits = 13 };
 
 // #undef  FILE_NAME
 
-uint64_t lz_read_file(lz77_t* lz) {
+static uint64_t file_read(lz77_t* lz) {
     uint64_t buffer = 0;
     if (lz->error == 0) { // sticky
         FILE* f = (FILE*)lz->that;
@@ -37,7 +37,7 @@ uint64_t lz_read_file(lz77_t* lz) {
     return buffer;
 }
 
-void lzn_write_file(lz77_t* lz, uint64_t buffer) {
+static void file_write(lz77_t* lz, uint64_t buffer) {
     if (lz->error == 0) {
         FILE* f = (FILE*)lz->that;
         const size_t bytes = sizeof(buffer);
@@ -46,6 +46,13 @@ void lzn_write_file(lz77_t* lz, uint64_t buffer) {
         }
     }
 }
+
+static bool file_exist(const char* filename) {
+    struct stat st = {0};
+    return stat(filename, &st) == 0;
+}
+
+static const char* input_file;
 
 static errno_t compress(const char* fn, const uint8_t* data, size_t bytes) {
     FILE* out = null; // compressed file
@@ -56,7 +63,7 @@ static errno_t compress(const char* fn, const uint8_t* data, size_t bytes) {
     }
     lz77_t lz = {
         .that = (void*)out,
-        .write = lzn_write_file
+        .write = file_write
     };
     lz77.write_header(&lz, bytes, lzn_window_bits);
     lz77.compress(&lz, data, bytes, lzn_window_bits);
@@ -70,14 +77,20 @@ static errno_t compress(const char* fn, const uint8_t* data, size_t bytes) {
             rt_println("Failed to compress: %s", strerror(r));
         } else {
             double percent = lz.written * 100.0 / bytes;
-            rt_println("%ld -> %ld %.1f%%", bytes, lz.written, percent);
+            if (input_file != null) {
+                rt_println("%7lld -> %7lld %5.1f%% of \"%s\"",
+                            bytes, lz.written, percent, input_file);
+            } else {
+                rt_println("%7lld -> %7lld %5.1f%%",
+                            bytes, lz.written, percent);
+            }
         }
     }
     return r;
 }
 
-static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
-        size_t size) {
+static errno_t verify(const char* fn, const uint8_t* input, size_t size) {
+    // decompress and compare
     FILE* in = null; // compressed file
     errno_t r = fopen_s(&in, fn, "rb");
     if (r != 0 || in == null) {
@@ -86,7 +99,7 @@ static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
     }
     lz77_t lz = {
         .that = (void*)in,
-        .read = lz_read_file
+        .read = file_read
     };
     size_t bytes = 0;
     uint8_t window_bits = 0;
@@ -105,9 +118,12 @@ static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
     if (lz.error == 0) {
         const bool same = size == bytes && memcmp(input, data, bytes) == 0;
         rt_assert(same);
-        rt_println("same: %s", same ? "true" : "false");
-        if (bytes < 128) {
-            rt_println("Decompressed: %s", data);
+        if (!same) {
+            rt_println("compress() and decompress() are not the same");
+            // ENODATA is not original posix error but is OpenGroup error
+            r = ENODATA; // or EIO
+        } else if (bytes < 128) {
+            rt_println("decompressed: %s", data);
         }
     }
     free(data);
@@ -117,27 +133,25 @@ static errno_t decompress_and_compare(const char* fn, const uint8_t* input,
     return r;
 }
 
-// assumption: fpos_t is 64 bit signed integer (if not code need rework)
-
-static_assert(sizeof(fpos_t) == sizeof(uint64_t), "fpos_t is not 64 bit");
-static_assert(((fpos_t)(uint64_t)(-1LL)) < 0, "fpos_t is not signed type");
-
-static fpos_t file_size(FILE* f) {
+static errno_t file_size(FILE* f, size_t* size) {
     // on error returns (fpos_t)-1 and sets errno
     fpos_t pos = 0;
-    if (fgetpos(f, &pos) != 0) { return (fpos_t)-1; }
-    if (fseek(f, 0, SEEK_END) != 0) { return (fpos_t)-1; }
-    fpos_t size = 0;
-    if (fgetpos(f, &size) != 0) { return (fpos_t)-1; }
-    if (fseek(f, 0, SEEK_SET) != 0) { return (fpos_t)-1; }
-    return size;
+    if (fgetpos(f, &pos) != 0) { return errno; }
+    if (fseek(f, 0, SEEK_END) != 0) { return errno; }
+    fpos_t eof = 0;
+    if (fgetpos(f, &eof) != 0) { return errno; }
+    if (fseek(f, 0, SEEK_SET) != 0) { return errno; }
+    if ((uint64_t)eof > SIZE_MAX) { return E2BIG; }
+    *size = (size_t)eof;
+    return 0;
 }
 
-static errno_t read_file_to_heap(FILE* f, const uint8_t* *data, size_t *bytes) {
-    fpos_t size = file_size(f);
-    if (size < 0) { return errno; }
+static errno_t read_fully(FILE* f, const uint8_t* *data, size_t *bytes) {
+    size_t size = 0;
+    errno_t r = file_size(f, &size);
+    if (r != 0) { return r; }
     if (size > SIZE_MAX) { return E2BIG; }
-    uint8_t* p = (uint8_t*)malloc(size);
+    uint8_t* p = (uint8_t*)malloc(size); // does set errno on failure
     if (p == null) { return errno; }
     if (fread(p, 1, size, f) != (size_t)size) { free(p); return errno; }
     *data = p;
@@ -152,7 +166,7 @@ static errno_t read_whole_file(const char* fn, const uint8_t* *data, size_t *byt
         rt_println("Failed to open file \"%s\": %s", FILE_NAME, strerror(r));
         return r;
     }
-    r = read_file_to_heap(f, data, bytes);
+    r = read_fully(f, data, bytes); // to the heap
     (void)fclose(f); // file was open for reading fclose() should not fail
     if (r != 0) {
         rt_println("Failed to read file \"%s\": %s", FILE_NAME, strerror(r));
@@ -163,19 +177,22 @@ static errno_t read_whole_file(const char* fn, const uint8_t* *data, size_t *byt
 }
 
 static errno_t test(const uint8_t* data, size_t bytes) {
-    errno_t r = compress("compressed.bin", data, bytes);
+    const char* compressed = "~compressed~.bin";
+    errno_t r = compress(compressed, data, bytes);
     if (r == 0) {
-        r = decompress_and_compare("compressed.bin", data, bytes);
+        r = verify(compressed, data, bytes);
     }
+    (void)remove(compressed);
     return r;
 }
 
-static errno_t test_file_compress(const char* fn) {
+static errno_t test_compression(const char* fn) {
     errno_t r = 0;
     uint8_t* data = null;
     size_t bytes = 0;
     r = read_whole_file(fn, &data, &bytes);
     if (r != 0) { return r; }
+    input_file = fn;
     return test(data, bytes);
 }
 
@@ -183,7 +200,12 @@ int main(int argc, const char* argv[]) {
     (void)argc; (void)argv;
     errno_t r = 0;
     if (r == 0) {
-        const uint8_t data[1024] = {0};
+        uint8_t data[1024] = {0};
+        r = test(data, sizeof(data));
+        // lz77 deals with run length encoding in amazing overlapped way
+        for (int32_t i = 0; i < sizeof(data); i += 4) {
+            memcpy(data + i, "\x01\x02\x03\x04", 4);
+        }
         r = test(data, sizeof(data));
     }
     if (r == 0) {
@@ -193,9 +215,18 @@ int main(int argc, const char* argv[]) {
     }
  #ifdef FILE_NAME
     if (r == 0) {
-        r = test_file_compress(FILE_NAME);
+        r = test_compression(FILE_NAME);
     }
 #endif
+    if (file_exist("test/ut.h")) {
+        r = test_compression("test/ut.h");
+    }
+    if (file_exist("test/ui.h")) {
+        r = test_compression("test/ui.h");
+    }
+    if (file_exist("test/sqlite3.c")) {
+        r = test_compression("test/sqlite3.c");
+    }
     return r;
 }
 

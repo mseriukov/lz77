@@ -70,16 +70,16 @@ static size_t lz77_hist_pos[64];
 } while (0)
 
 #define lz77_dump_histograms() do {                             \
-    rt_println("Histogram log2(len):");                         \
+    lz77_println("Histogram log2(len):");                       \
     for (int8_t i = 0; i < 64; i++) {                           \
         if (lz77_hist_len[i] > 0) {                             \
-            rt_println("len[%d]: %lld", i, lz77_hist_len[i]);   \
+            lz77_println("len[%d]: %lld", i, lz77_hist_len[i]); \
         }                                                       \
     }                                                           \
-    rt_println("Histogram log2(pos):");                         \
+    lz77_println("Histogram log2(pos):");                       \
     for (int8_t i = 0; i < 64; i++) {                           \
         if (lz77_hist_pos[i] > 0) {                             \
-            rt_println("pos[%d]: %lld", i, lz77_hist_pos[i]);   \
+            lz77_println("pos[%d]: %lld", i, lz77_hist_pos[i]); \
         }                                                       \
     }                                                           \
 } while (0)
@@ -174,7 +174,6 @@ static void lz77_compress(lz77_t* lz, const uint8_t* data, size_t bytes,
     lz77_init_histograms();
     const size_t window = ((size_t)1U) << window_bits;
     const uint8_t base = (window_bits - 4) / 2;
-    rt_println("base: %d", base);
     uint64_t b64 = 0;
     uint32_t bp = 0;
     // for parameter verification in decompress()
@@ -207,8 +206,6 @@ static void lz77_compress(lz77_t* lz, const uint8_t* data, size_t bytes,
             write_bits(lz, 0b11, 2); /* flags */
             write_number(lz, pos, base);
             write_number(lz, len, base);
-//          rt_println("[%5lld] pos: %5lld len: %4lld bytes: %lld",
-//                      i, pos, len, lz->bytes_written);
             lz77_histogram_pos_len(pos, len);
             i += len;
         } else {
@@ -217,7 +214,6 @@ static void lz77_compress(lz77_t* lz, const uint8_t* data, size_t bytes,
             if (b < 0x80) {
                 write_bit(lz, 0); /* flags */
                 write_bits(lz, b, 7); // ASCII byte < 0x80 with 8th but set to `0`
-//              rt_println("[%05lld] char: %c 0x%02X %d", i, b, b, b);
             } else {
                 write_bits(lz, 0b10, 2); /* flags */
                 write_bits(lz, b, 7); // only 7 bit because 8th bit is `1`
@@ -326,7 +322,6 @@ static void lz77_decompress(lz77_t* lz, uint8_t* data, size_t bytes,
         } else { // literal byte
             size_t b = 0; // ASCII byte < 0x80
             read_bits(lz, b, 7);
-//          rt_println("[%05lld] char: %c 0x%02X %d", i, b, b, b);
             data[i] = (uint8_t)b;
             i++;
         }
